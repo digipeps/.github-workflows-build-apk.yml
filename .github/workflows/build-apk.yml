@@ -4,17 +4,22 @@ name: Build Perjuangan Semut APK
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches:
+      - main
+
+permissions:
+  contents: read
 
 jobs:
   build:
+    name: Build Android APK
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Java
+      - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -25,47 +30,72 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Find and extract Android ZIP
+      - name: Check and extract Android project
+        shell: bash
         run: |
-          set -e
-          ZIP_FILE=$(find . -type f -iname "*.zip" -not -path "./.git/*" | head -n 1)
+          set -euo pipefail
 
-          if [ -z "$ZIP_FILE" ]; then
-            echo "ERROR: File ZIP proyek Android tidak ditemukan."
-            find . -maxdepth 3 -type f
+          ZIP_FILE="PerjuanganSemutAndroid-CloudBuild.zip"
+
+          echo "Memeriksa file ZIP..."
+          ls -lah
+
+          if [ ! -f "$ZIP_FILE" ]; then
+            echo "ERROR: File ZIP tidak ditemukan di root repository."
             exit 1
           fi
 
-          echo "ZIP ditemukan: $ZIP_FILE"
+          echo "Memeriksa integritas ZIP..."
+          unzip -t "$ZIP_FILE"
+
+          echo "Mengekstrak proyek..."
           mkdir -p extracted
-          unzip -q "$ZIP_FILE" -d extracted
+          unzip -oq "$ZIP_FILE" -d extracted
 
-      - name: Build Android APK
-        run: |
-          set -e
-          SETTINGS=$(find extracted -type f \( -name "settings.gradle" -o -name "settings.gradle.kts" \) | head -n 1)
+          PROJECT_DIR="extracted/PerjuanganSemutAndroid"
 
-          if [ -z "$SETTINGS" ]; then
+          if [ ! -f "$PROJECT_DIR/settings.gradle" ]; then
             echo "ERROR: settings.gradle tidak ditemukan."
-            find extracted -maxdepth 4 -type f
+            find extracted -maxdepth 5 -type f
             exit 1
           fi
 
-          PROJECT_DIR=$(dirname "$SETTINGS")
-          echo "Project: $PROJECT_DIR"
+          if [ ! -f "$PROJECT_DIR/app/build.gradle" ]; then
+            echo "ERROR: app/build.gradle tidak ditemukan."
+            exit 1
+          fi
+
+          echo "Proyek Android berhasil ditemukan."
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+
+      - name: Build debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
 
           cd "$PROJECT_DIR"
-          gradle --no-daemon :app:assembleDebug
 
-          APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -n 1)
-          test -n "$APK"
+          echo "Memulai kompilasi APK..."
+          gradle --no-daemon --stacktrace :app:assembleDebug
 
-          cp "$APK" "$GITHUB_WORKSPACE/Perjuangan-Semut-Reborn.apk"
+          APK_PATH="app/build/outputs/apk/debug/app-debug.apk"
 
-      - name: Upload APK
+          if [ ! -f "$APK_PATH" ]; then
+            echo "ERROR: APK tidak ditemukan setelah build."
+            find app/build/outputs -type f || true
+            exit 1
+          fi
+
+          mkdir -p "$GITHUB_WORKSPACE/output"
+          cp "$APK_PATH" "$GITHUB_WORKSPACE/output/Perjuangan-Semut-Reborn.apk"
+
+          echo "APK berhasil dibuat."
+          ls -lh "$GITHUB_WORKSPACE/output/"
+
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: Perjuangan-Semut-Reborn-APK
-          path: Perjuangan-Semut-Reborn.apk
+          path: output/Perjuangan-Semut-Reborn.apk
           if-no-files-found: error
-          
+          retention-days: 14
